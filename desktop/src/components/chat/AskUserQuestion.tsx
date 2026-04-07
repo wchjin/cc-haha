@@ -9,6 +9,7 @@ type QuestionOption = {
 
 type Question = {
   question: string
+  header?: string
   options?: QuestionOption[]
 }
 
@@ -46,6 +47,7 @@ function parseInput(input: unknown): Question[] {
 export function AskUserQuestion({ toolUseId: _toolUseId, input }: Props) {
   const { sendMessage } = useChatStore()
   const questions = parseInput(input)
+  const [activeTab, setActiveTab] = useState(0)
   const [selections, setSelections] = useState<Record<number, string>>({})
   const [freeText, setFreeText] = useState('')
   const [submitted, setSubmitted] = useState(false)
@@ -54,35 +56,39 @@ export function AskUserQuestion({ toolUseId: _toolUseId, input }: Props) {
 
   const handleSelect = (qIndex: number, label: string) => {
     if (submitted) return
-    setSelections((prev) => ({ ...prev, [qIndex]: label }))
-    // Clear free text when an option is selected
+    setSelections((prev) => {
+      // Toggle: deselect if already selected
+      if (prev[qIndex] === label) {
+        const next = { ...prev }
+        delete next[qIndex]
+        return next
+      }
+      return { ...prev, [qIndex]: label }
+    })
     setFreeText('')
   }
 
   const handleSubmit = () => {
     if (submitted) return
 
-    // Build the response text
     const parts: string[] = []
     for (let i = 0; i < questions.length; i++) {
       const selected = selections[i]
-      if (selected) {
-        parts.push(selected)
-      }
+      if (selected) parts.push(selected)
     }
-    // Free text overrides if provided
     const response = freeText.trim() || parts.join('; ') || ''
     if (!response) return
 
     setSubmitted(true)
-    // Send the response as a user message -- the server routes it as a tool_result
     sendMessage(response)
   }
 
-  const hasSelection = Object.keys(selections).length > 0 || freeText.trim().length > 0
+  // All questions must be answered (via selection or free text) to enable submit
+  const allAnswered = freeText.trim().length > 0 || questions.every((_, i) => selections[i] !== undefined)
+  const activeQuestion = questions[activeTab]
 
   return (
-    <div className={`mb-4 rounded-[var(--radius-lg)] border overflow-hidden ${
+    <div className={`mb-4 ml-10 rounded-[var(--radius-lg)] border overflow-hidden ${
       submitted
         ? 'border-[var(--color-outline-variant)]/40 bg-[var(--color-surface-container-low)] opacity-70'
         : 'border-[var(--color-secondary)] bg-[var(--color-surface-container-lowest)]'
@@ -110,90 +116,111 @@ export function AskUserQuestion({ toolUseId: _toolUseId, input }: Props) {
         </div>
       </div>
 
-      {/* Questions */}
-      <div className="px-4 py-3 space-y-4">
-        {questions.map((q, qIndex) => (
-          <div key={qIndex}>
-            <p className="text-sm font-medium text-[var(--color-text-primary)] mb-3">
-              {q.question}
-            </p>
+      {/* Question tabs — horizontal tab bar (only show when multiple questions) */}
+      {questions.length > 1 && (
+        <div className="flex px-4 border-b border-[var(--color-outline-variant)]/20 bg-[var(--color-surface-container-low)] overflow-x-auto">
+          {questions.map((q, i) => {
+            const isActive = activeTab === i
+            const isAnswered = selections[i] !== undefined
+            const tabLabel = q.header || `Q${i + 1}`
+            return (
+              <button
+                key={i}
+                onClick={() => setActiveTab(i)}
+                className={`relative flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium whitespace-nowrap transition-colors ${
+                  isActive
+                    ? 'text-[var(--color-secondary)]'
+                    : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]'
+                }`}
+              >
+                {isAnswered && (
+                  <span className="material-symbols-outlined text-[14px] text-[var(--color-success)]">check_circle</span>
+                )}
+                {tabLabel}
+                {isActive && (
+                  <div className="absolute bottom-0 left-2 right-2 h-[2px] bg-[var(--color-secondary)] rounded-t" />
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
 
-            {/* Option cards */}
-            {q.options && q.options.length > 0 && (
-              <div className="space-y-2 mb-3">
-                {q.options.map((opt, optIndex) => {
-                  const isSelected = selections[qIndex] === opt.label
-                  return (
-                    <button
-                      key={optIndex}
-                      onClick={() => handleSelect(qIndex, opt.label)}
-                      disabled={submitted}
-                      className={`w-full text-left px-4 py-3 rounded-[var(--radius-md)] border transition-all duration-150 cursor-pointer ${
+      {/* Active question content */}
+      <div className="px-4 py-3">
+        <p className="text-sm font-medium text-[var(--color-text-primary)] mb-3">
+          {activeQuestion.question}
+        </p>
+
+        {/* Option cards */}
+        {activeQuestion.options && activeQuestion.options.length > 0 && (
+          <div className="space-y-2 mb-3">
+            {activeQuestion.options.map((opt, optIndex) => {
+              const isSelected = selections[activeTab] === opt.label
+              return (
+                <button
+                  key={optIndex}
+                  onClick={() => handleSelect(activeTab, opt.label)}
+                  disabled={submitted}
+                  className={`w-full text-left px-4 py-3 rounded-[var(--radius-md)] border transition-all duration-150 cursor-pointer ${
+                    isSelected
+                      ? 'border-[var(--color-secondary)] bg-[var(--color-secondary)]/8 ring-1 ring-[var(--color-secondary)]/30'
+                      : 'border-[var(--color-outline-variant)]/40 bg-[var(--color-surface)] hover:border-[var(--color-outline-variant)] hover:bg-[var(--color-surface-container-low)]'
+                  } ${submitted ? 'cursor-default' : ''}`}
+                >
+                  <div className="flex items-start gap-3">
+                    {/* Check indicator */}
+                    <div className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded-full border-2 flex items-center justify-center transition-colors ${
+                      isSelected
+                        ? 'border-[var(--color-secondary)] bg-[var(--color-secondary)]'
+                        : 'border-[var(--color-outline)]'
+                    }`}>
+                      {isSelected && (
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className={`text-sm font-medium ${
                         isSelected
-                          ? 'border-[var(--color-secondary)] bg-[var(--color-secondary)]/8 ring-1 ring-[var(--color-secondary)]/30'
-                          : 'border-[var(--color-outline-variant)]/40 bg-[var(--color-surface)] hover:border-[var(--color-outline-variant)] hover:bg-[var(--color-surface-container-low)]'
-                      } ${submitted ? 'cursor-default' : ''}`}
-                    >
-                      <div className="flex items-start gap-3">
-                        {/* Radio indicator */}
-                        <div className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded-full border-2 flex items-center justify-center transition-colors ${
-                          isSelected
-                            ? 'border-[var(--color-secondary)]'
-                            : 'border-[var(--color-outline)]'
-                        }`}>
-                          {isSelected && (
-                            <div className="w-2 h-2 rounded-full bg-[var(--color-secondary)]" />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <span className={`text-sm font-medium ${
-                            isSelected
-                              ? 'text-[var(--color-secondary)]'
-                              : 'text-[var(--color-text-primary)]'
-                          }`}>
-                            {opt.label}
-                          </span>
-                          {opt.description && (
-                            <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">
-                              {opt.description}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            )}
+                          ? 'text-[var(--color-secondary)]'
+                          : 'text-[var(--color-text-primary)]'
+                      }`}>
+                        {opt.label}
+                      </span>
+                      {opt.description && (
+                        <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">
+                          {opt.description}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
           </div>
-        ))}
+        )}
 
-        {/* Free text "Other" input */}
+        {/* Free text input */}
         {!submitted && (
           <div>
             <label className="text-xs text-[var(--color-text-tertiary)] mb-1.5 block">
               Or type a custom response:
             </label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={freeText}
-                onChange={(e) => {
-                  setFreeText(e.target.value)
-                  // Clear radio selections when typing
-                  if (e.target.value.trim()) {
-                    setSelections({})
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && hasSelection) {
-                    handleSubmit()
-                  }
-                }}
-                placeholder="Type your answer..."
-                className="flex-1 px-3 py-2 text-sm bg-[var(--color-surface)] border border-[var(--color-outline-variant)]/40 rounded-[var(--radius-md)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:border-[var(--color-secondary)] focus:ring-1 focus:ring-[var(--color-secondary)]/30"
-              />
-            </div>
+            <input
+              type="text"
+              value={freeText}
+              onChange={(e) => {
+                setFreeText(e.target.value)
+                if (e.target.value.trim()) setSelections({})
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && allAnswered) handleSubmit()
+              }}
+              placeholder="Type your answer..."
+              className="w-full px-3 py-2 text-sm bg-[var(--color-surface)] border border-[var(--color-outline-variant)]/40 rounded-[var(--radius-md)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:border-[var(--color-secondary)] focus:ring-1 focus:ring-[var(--color-secondary)]/30"
+            />
           </div>
         )}
 
@@ -214,7 +241,7 @@ export function AskUserQuestion({ toolUseId: _toolUseId, input }: Props) {
           <Button
             variant="primary"
             size="sm"
-            disabled={!hasSelection}
+            disabled={!allAnswered}
             onClick={handleSubmit}
             icon={
               <span className="material-symbols-outlined text-[14px]">send</span>
