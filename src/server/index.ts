@@ -217,6 +217,35 @@ export function startServer(port = PORT, host = HOST) {
   return server
 }
 
+// ─── Graceful shutdown: kill all CLI subprocesses on exit ────────────────────
+import { conversationService } from './services/conversationService.js'
+
+function cleanupAllSessions() {
+  const active = conversationService.getActiveSessions()
+  if (active.length > 0) {
+    console.log(`[Server] Shutting down — killing ${active.length} CLI subprocess(es)`)
+    for (const sessionId of active) {
+      conversationService.stopSession(sessionId)
+    }
+  }
+}
+
+process.on('SIGTERM', () => {
+  console.log('[Server] Received SIGTERM')
+  cleanupAllSessions()
+  process.exit(0)
+})
+
+process.on('SIGINT', () => {
+  console.log('[Server] Received SIGINT')
+  cleanupAllSessions()
+  process.exit(0)
+})
+
+process.on('exit', () => {
+  cleanupAllSessions()
+})
+
 // Direct execution
 if (import.meta.main) {
   startServer()

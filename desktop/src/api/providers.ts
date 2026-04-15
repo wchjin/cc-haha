@@ -14,6 +14,11 @@ type ProvidersResponse = { providers: SavedProvider[]; activeId: string | null }
 type ProviderResponse = { provider: SavedProvider }
 type PresetsResponse = { presets: ProviderPreset[] }
 type TestResultResponse = { result: ProviderTestResult }
+type AuthStatusResponse = {
+  hasAuth: boolean
+  source: 'cc-haha-provider' | 'original-settings' | 'env' | 'none'
+  activeProvider?: string
+}
 
 export const providersApi = {
   list() {
@@ -22,6 +27,10 @@ export const providersApi = {
 
   presets() {
     return api.get<PresetsResponse>('/api/providers/presets')
+  },
+
+  authStatus() {
+    return api.get<AuthStatusResponse>('/api/providers/auth-status')
   },
 
   create(input: CreateProviderInput) {

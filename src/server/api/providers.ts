@@ -3,6 +3,7 @@
  *
  * GET    /api/providers              — list all saved providers + activeId
  * GET    /api/providers/presets       — list available presets
+ * GET    /api/providers/auth-status   — check whether any usable auth exists
  * POST   /api/providers              — add a provider
  * PUT    /api/providers/:id          — update a provider
  * DELETE /api/providers/:id          — delete a provider
@@ -53,6 +54,12 @@ export async function handleProvidersApi(
     // GET /api/providers/presets
     if (id === 'presets' && req.method === 'GET') {
       return Response.json({ presets: PROVIDER_PRESETS })
+    }
+
+    // GET /api/providers/auth-status
+    if (id === 'auth-status' && req.method === 'GET') {
+      const status = await providerService.checkAuthStatus()
+      return Response.json(status)
     }
 
     // POST /api/providers/official

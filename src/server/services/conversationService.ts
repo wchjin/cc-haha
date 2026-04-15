@@ -117,11 +117,34 @@ export class ConversationService {
     // STATE.cwd / "Primary working directory" 打回根目录，IM 会话里 AI 感知的
     // 工作目录就变成 `/`。把 CALLER_DIR / PWD 显式覆盖成 workDir，preload.ts
     // chdir 后落到正确目录。
+    //
+    // Provider isolation: strip provider-managed env vars from the inherited
+    // process.env so the CLI subprocess reads them fresh from config files
+    // (cc-haha/settings.json or ~/.claude/settings.json). Without this,
+    // switching to "Claude 官方" in the desktop UI would still send requests
+    // to the previous provider because stale env vars linger in the sidecar's
+    // process.env after activateOfficial() only clears the config file.
+    const PROVIDER_ENV_KEYS = [
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_BASE_URL',
+      'ANTHROPIC_AUTH_TOKEN',
+      'ANTHROPIC_MODEL',
+      'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+      'ANTHROPIC_DEFAULT_SONNET_MODEL',
+      'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    ]
+    const cleanEnv = { ...process.env }
+    for (const key of PROVIDER_ENV_KEYS) {
+      delete cleanEnv[key]
+    }
     const childEnv = {
-      ...process.env,
+      ...cleanEnv,
       CLAUDE_CODE_ENABLE_TASKS: '1',
       CALLER_DIR: workDir,
       PWD: workDir,
+      // Tell bin/claude-haha to skip .env loading — provider env is managed
+      // by cc-haha/settings.json, not the project's .env file.
+      CC_HAHA_SKIP_DOTENV: '1',
     }
 
     let proc: ReturnType<typeof Bun.spawn>

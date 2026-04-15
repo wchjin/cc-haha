@@ -11,6 +11,7 @@ import { TabBar } from './TabBar'
 import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useTranslation } from '../../i18n'
+import { providersApi } from '../../api/providers'
 
 export function AppShell() {
   const fetchSettings = useSettingsStore((s) => s.fetchAll)
@@ -25,6 +26,19 @@ export function AppShell() {
       try {
         await initializeDesktopServerUrl()
         await fetchSettings()
+
+        // Check auth status: if no auth at all, redirect to provider setup
+        try {
+          const authStatus = await providersApi.authStatus()
+          if (!authStatus.hasAuth) {
+            // No auth — open Settings on the providers tab
+            useUIStore.getState().setPendingSettingsTab('providers')
+            useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
+          }
+        } catch {
+          // auth-status check failed — continue normally
+        }
+
         // Restore tabs from localStorage
         await useTabStore.getState().restoreTabs()
         const activeId = useTabStore.getState().activeTabId
