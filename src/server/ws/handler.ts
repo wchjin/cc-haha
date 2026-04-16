@@ -305,9 +305,59 @@ function handleSetPermissionMode(
   message: Extract<ClientMessage, { type: 'set_permission_mode' }>
 ) {
   const { sessionId } = ws.data
+
+  // Switching to/from bypassPermissions requires the CLI to be (re)started with
+  // --dangerously-skip-permissions. The CLI rejects a runtime set_permission_mode
+  // to bypassPermissions if it wasn't launched with that flag.  Rather than just
+  // sending the SDK message (which would silently fail), restart the CLI subprocess
+  // with the correct arguments so the new permission mode takes effect.
+  const needsRestart =
+    conversationService.hasSession(sessionId) &&
+    (message.mode === 'bypassPermissions' || conversationService.getSessionPermissionMode(sessionId) === 'bypassPermissions')
+
+  if (needsRestart) {
+    void restartSessionWithPermissionMode(ws, sessionId, message.mode)
+    return
+  }
+
   const ok = conversationService.setPermissionMode(sessionId, message.mode)
   if (!ok) {
     console.warn(`[WS] Ignored permission mode update for inactive session ${sessionId}`)
+  }
+}
+
+async function restartSessionWithPermissionMode(
+  ws: ServerWebSocket<WebSocketData>,
+  sessionId: string,
+  mode: string,
+): Promise<void> {
+  try {
+    sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Restarting session with new permissions...' })
+
+    // Persist the new mode first so it's read on restart
+    await settingsService.setPermissionMode(mode)
+
+    const workDir = conversationService.getSessionWorkDir(sessionId)
+    conversationService.stopSession(sessionId)
+
+    // Rebuild runtime settings (will pick up the persisted mode)
+    const runtimeSettings = await getRuntimeSettings()
+    const sdkUrl =
+      `ws://${ws.data.serverHost}:${ws.data.serverPort}/sdk/${sessionId}` +
+      `?token=${encodeURIComponent(crypto.randomUUID())}`
+    await conversationService.startSession(sessionId, workDir, sdkUrl, runtimeSettings)
+
+    sendMessage(ws, { type: 'status', state: 'idle' })
+    console.log(`[WS] Restarted CLI for ${sessionId} with permission mode: ${mode}`)
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    console.error(`[WS] Failed to restart CLI for ${sessionId}: ${errMsg}`)
+    sendMessage(ws, {
+      type: 'error',
+      message: `Failed to restart session with new permission mode: ${errMsg}`,
+      code: 'CLI_RESTART_FAILED',
+    })
+    sendMessage(ws, { type: 'status', state: 'idle' })
   }
 }
 
@@ -386,6 +436,9 @@ type SessionStreamState = {
   hasReceivedStreamEvents: boolean
   activeBlockTypes: Map<number, 'text' | 'tool_use'>
   activeToolBlocks: Map<number, { toolName: string; toolUseId: string; inputJson: string }>
+  /** Tool blocks whose input JSON failed to parse in content_block_stop.
+   *  The assistant message carries the complete input — defer to that. */
+  pendingToolBlocks: Map<string, { toolName: string; toolUseId: string; parentToolUseId?: string }>
 }
 
 const sessionStreamStates = new Map<string, SessionStreamState>()
@@ -397,6 +450,7 @@ function getStreamState(sessionId: string): SessionStreamState {
       hasReceivedStreamEvents: false,
       activeBlockTypes: new Map(),
       activeToolBlocks: new Map(),
+      pendingToolBlocks: new Map(),
     }
     sessionStreamStates.set(sessionId, state)
   }
@@ -427,7 +481,20 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
 
         for (const block of cliMsg.message.content) {
           if (streamState.hasReceivedStreamEvents) {
-            // Everything was already sent via stream_event — skip all blocks
+            // Stream events handled most blocks — but any tool_use whose
+            // input JSON failed to parse in content_block_stop was deferred.
+            // Emit those now with the complete input from the assistant message.
+            if (block.type === 'tool_use' && streamState.pendingToolBlocks.has(block.id)) {
+              const pending = streamState.pendingToolBlocks.get(block.id)!
+              streamState.pendingToolBlocks.delete(block.id)
+              messages.push({
+                type: 'tool_use_complete',
+                toolName: pending.toolName || block.name,
+                toolUseId: block.id,
+                input: block.input,
+                parentToolUseId: pending.parentToolUseId,
+              })
+            }
           } else {
             // No stream events received — this is the only source, process everything
             if (block.type === 'thinking' && block.thinking) {
@@ -450,8 +517,9 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
           }
         }
 
-        // Reset flag for next turn
+        // Reset flags for next turn
         streamState.hasReceivedStreamEvents = false
+        streamState.pendingToolBlocks.clear()
         return messages
       }
       return []
@@ -549,18 +617,33 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
             const toolBlock = streamState.activeToolBlocks.get(index)
             streamState.activeToolBlocks.delete(index)
             if (toolBlock) {
+              const parentToolUseId =
+                typeof cliMsg.parent_tool_use_id === 'string'
+                  ? cliMsg.parent_tool_use_id
+                  : undefined
               let parsedInput = null
               try { parsedInput = JSON.parse(toolBlock.inputJson) } catch {}
-              return [{
-                type: 'tool_use_complete',
+
+              if (parsedInput !== null) {
+                return [{
+                  type: 'tool_use_complete',
+                  toolName: toolBlock.toolName,
+                  toolUseId: toolBlock.toolUseId,
+                  input: parsedInput,
+                  parentToolUseId,
+                }]
+              }
+
+              // JSON parse failed — defer to the assistant message which
+              // carries the complete, already-parsed tool input.
+              console.warn(
+                `[WS] Tool input JSON parse failed for ${toolBlock.toolName} (${toolBlock.toolUseId}), deferring to assistant message`,
+              )
+              streamState.pendingToolBlocks.set(toolBlock.toolUseId, {
                 toolName: toolBlock.toolName,
                 toolUseId: toolBlock.toolUseId,
-                input: parsedInput,
-                parentToolUseId:
-                  typeof cliMsg.parent_tool_use_id === 'string'
-                    ? cliMsg.parent_tool_use_id
-                    : undefined,
-              }]
+                parentToolUseId,
+              })
             }
           }
           return []

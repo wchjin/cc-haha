@@ -23,6 +23,7 @@ type SessionProcess = {
   proc: ReturnType<typeof Bun.spawn>
   outputCallbacks: Array<(msg: any) => void>
   workDir: string
+  permissionMode: string
   sdkToken: string
   sdkSocket: { send(data: string): void } | null
   pendingOutbound: string[]
@@ -142,6 +143,7 @@ export class ConversationService {
       proc,
       outputCallbacks: [],
       workDir,
+      permissionMode: options?.permissionMode || 'default',
       sdkToken: this.getSdkTokenFromUrl(sdkUrl),
       sdkSocket: null,
       pendingOutbound: [],
@@ -283,6 +285,16 @@ export class ConversationService {
 
   hasSession(sessionId: string): boolean {
     return this.sessions.has(sessionId)
+  }
+
+  getSessionWorkDir(sessionId: string): string {
+    const session = this.sessions.get(sessionId)
+    return session?.workDir || ''
+  }
+
+  getSessionPermissionMode(sessionId: string): string {
+    const session = this.sessions.get(sessionId)
+    return session?.permissionMode || 'default'
   }
 
   authorizeSdkConnection(

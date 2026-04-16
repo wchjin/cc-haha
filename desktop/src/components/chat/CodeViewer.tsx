@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { ShikiHighlighter } from 'react-shiki'
 import 'react-shiki/css'
 import { CopyButton } from '../shared/CopyButton'
@@ -45,6 +45,75 @@ const warmCodeTheme = {
   ],
 }
 
+/**
+ * Wraps ShikiHighlighter with a plain-text fallback so the code area
+ * is never empty while the async WASM / language-grammar load is in-flight,
+ * or if highlighting fails entirely.
+ */
+function CodeArea({ code, language, showLineNumbers }: { code: string; language?: string; showLineNumbers: boolean }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    // ShikiHighlighter renders `null` until the async highlight completes.
+    // Watch for real content appearing via MutationObserver so we can hide
+    // the plain-text fallback as soon as highlighted output is in the DOM.
+    const el = containerRef.current
+    if (!el) return
+    const check = () => {
+      const shikiContainer = el.querySelector('[data-testid="shiki-container"]')
+      // shiki renders a <code> element inside its container once highlighting is done
+      if (shikiContainer?.querySelector('code')) {
+        setLoaded(true)
+      }
+    }
+    check()
+    const observer = new MutationObserver(check)
+    observer.observe(el, { childList: true, subtree: true })
+    return () => observer.disconnect()
+  }, [code, language])
+
+  return (
+    <div ref={containerRef} className="code-viewer-area max-h-[420px] overflow-auto bg-[#FDFCF9]">
+      {/* Plain-text fallback shown until Shiki finishes highlighting */}
+      {!loaded && (
+        <pre
+          style={{
+            margin: 0,
+            padding: '0.5rem 12px',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '12px',
+            lineHeight: '1.45',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            color: '#24201E',
+          }}
+        >
+          {code}
+        </pre>
+      )}
+      <div style={loaded ? undefined : { position: 'absolute', opacity: 0, pointerEvents: 'none' }}>
+        <ShikiHighlighter
+          language={language || 'text'}
+          theme={warmCodeTheme}
+          showLineNumbers={showLineNumbers}
+          showLanguage={false}
+          addDefaultStyles={false}
+          style={{
+            margin: 0,
+            padding: '0.5rem 0',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '12px',
+            lineHeight: '1.45',
+          }}
+        >
+          {code}
+        </ShikiHighlighter>
+      </div>
+    </div>
+  )
+}
+
 export function CodeViewer({ code, language, maxLines = 20, showLineNumbers = true }: Props) {
   const [expanded, setExpanded] = useState(false)
 
@@ -72,24 +141,11 @@ export function CodeViewer({ code, language, maxLines = 20, showLineNumbers = tr
       </div>
 
       {/* Code area */}
-      <div className="code-viewer-area max-h-[420px] overflow-auto bg-[#FDFCF9]">
-        <ShikiHighlighter
-          language={language || 'text'}
-          theme={warmCodeTheme}
-          showLineNumbers={effectiveShowLineNumbers}
-          showLanguage={false}
-          addDefaultStyles={false}
-          style={{
-            margin: 0,
-            padding: '0.5rem 0',
-            fontFamily: 'var(--font-mono)',
-            fontSize: '12px',
-            lineHeight: '1.45',
-          }}
-        >
-          {visibleCode}
-        </ShikiHighlighter>
-      </div>
+      <CodeArea
+        code={visibleCode}
+        language={language}
+        showLineNumbers={effectiveShowLineNumbers}
+      />
 
       {/* Expand/collapse toggle */}
       {showExpandToggle && (
